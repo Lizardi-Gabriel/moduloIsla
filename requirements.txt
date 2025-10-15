@@ -1,0 +1,5 @@
+azure-storage-blob
+ultralytics
+requests
+opencv-python
+python-dotenv
