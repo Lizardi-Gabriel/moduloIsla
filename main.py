@@ -24,9 +24,10 @@ apiUrl = "http://4.155.33.198:8000/images/with-detections"
 rtspUrl = "rtsp://lizardi:zenobia16@10.3.56.116/cam/realmonitor?channel=2&subtype=0"
 modelPath = "./modelos/beta01.pt"
 confThreshold = 0.5
-captureInterval = 10
 temporalDir = "./frames_temp"
 
+# intervalo entre frames para analizar
+frameInterval = 5
 
 # asegurar que la carpeta temporal exista
 os.makedirs(temporalDir, exist_ok=True)
@@ -40,7 +41,7 @@ except Exception as error:
 
 
 def subirAzure(localPath, fileName):
-    """Subir la imagen a Azure Blob Storage usando el Token SAS."""
+    """subir la imagen a Azure Blob Storage usando el Token SAS"""
     blobUrl = f"{azureContainerUrl}/{fileName}?{tokenSas}"
 
     try:
@@ -68,7 +69,7 @@ def subirAzure(localPath, fileName):
 
 
 def enviarApi(imageUrl, detectionList):
-    """Enviar datos de la deteccion (URL y Bounding Boxes) a la API."""
+    """enviar datos de la deteccion a la API"""
     try:
         response = requests.post(f"{apiUrl}?image_path={imageUrl}", json=detectionList)
 
@@ -81,15 +82,18 @@ def enviarApi(imageUrl, detectionList):
 
 
 def ejecutarCaptura():
-    """Bucle principal de captura, deteccion y subida."""
-    # cap = cv2.VideoCapture(RTSP_URL) # Usar stream real
-    cap = cv2.VideoCapture(0)
+    """bucle principal de captura con deteccion por cambio de cantidad"""
+    # cap = cv2.VideoCapture(rtspUrl) # usar stream real
+    cap = cv2.VideoCapture(rtspUrl)
 
     if not cap.isOpened():
         print("Error: No se pudo conectar al stream de video.")
         return
 
-    print("Capturando frames, detectando y subiendo a Azure...")
+    print("Capturando frames y detectando cambios en cantidad de cigarros...")
+
+    # variable para rastrear la cantidad anterior de detecciones
+    cantidadAnterior = None
 
     try:
         while True:
@@ -99,49 +103,59 @@ def ejecutarCaptura():
                 time.sleep(1)
                 continue
 
-            # 1. Preparar nombres y rutas
+            # preparar ruta temporal para analisis
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             fileName = f"frame_{timestamp}_{uuid.uuid4().hex[:6]}.jpg"
             localPath = os.path.join(temporalDir, fileName)
 
-            # 2. Guardar imagen temporal
+            # guardar imagen temporal para analisis
             cv2.imwrite(localPath, frame)
 
-            # 3. Ejecutar modelo YOLO
+            # ejecutar modelo YOLO
             results = model(localPath, conf=confThreshold, iou=0.45, verbose=False)
             yoloDetections = results[0].boxes
+            cantidadActual = len(yoloDetections)
 
-            detectionList = []
+            # verificar si hubo cambio en la cantidad
+            if cantidadActual != cantidadAnterior:
+                print(f"Cambio detectado: {cantidadAnterior} -> {cantidadActual} cigarros")
 
-            if len(yoloDetections) > 0:
-                print(f"Cigarros Detectados {len(yoloDetections)} objeto(s). Procesando...")
+                # solo procesar si hay al menos una deteccion
+                if cantidadActual > 0:
+                    detectionList = []
 
-                # anotar el frame y guardar la imagen anotada
-                annotatedFrame = results[0].plot()
-                cv2.imwrite(localPath, annotatedFrame)
+                    # anotar el frame y guardar la imagen anotada
+                    annotatedFrame = results[0].plot()
+                    cv2.imwrite(localPath, annotatedFrame)
 
-                for det in yoloDetections:
-                    confidence = float(det.conf[0])
-                    x1, y1, x2, y2 = map(int, det.xyxy[0])
-                    detectionList.append({
-                        "confianza": confidence,
-                        "x1": x1,
-                        "y1": y1,
-                        "x2": x2,
-                        "y2": y2
-                    })
+                    for det in yoloDetections:
+                        confidence = float(det.conf[0])
+                        x1, y1, x2, y2 = map(int, det.xyxy[0])
+                        detectionList.append({
+                            "confianza": confidence,
+                            "x1": x1,
+                            "y1": y1,
+                            "x2": x2,
+                            "y2": y2
+                        })
 
-                # 4. Subir imagen a Azure
-                azureUrl = subirAzure(localPath, fileName)
+                    # subir imagen a Azure
+                    azureUrl = subirAzure(localPath, fileName)
 
-                # 5. Enviar a la API
-                if azureUrl:
-                    enviarApi(azureUrl, detectionList)
+                    # enviar a la API
+                    if azureUrl:
+                        enviarApi(azureUrl, detectionList)
+                else:
+                    print("Cambio a 0 cigarros detectado (no se guarda imagen)")
 
-            # 6. Limpiar archivo temporal
-            os.remove(localPath)
+                # actualizar cantidad anterior
+                cantidadAnterior = cantidadActual
 
-            time.sleep(captureInterval)
+            # limpiar archivo temporal
+            if os.path.exists(localPath):
+                os.remove(localPath)
+
+            time.sleep(frameInterval)
 
     except KeyboardInterrupt:
         print("\nCaptura detenida.")
@@ -149,7 +163,9 @@ def ejecutarCaptura():
         cap.release()
         # limpiar cualquier archivo temporal restante al salir
         for file in os.listdir(temporalDir):
-            os.remove(os.path.join(temporalDir, file))
+            filePath = os.path.join(temporalDir, file)
+            if os.path.exists(filePath):
+                os.remove(filePath)
 
 
 if __name__ == "__main__":
