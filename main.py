@@ -23,8 +23,8 @@ apiUrl = "http://4.155.33.198:8000/images/with-detections"
 # configurar modelo y captura
 rtspUrl = "rtsp://lizardi:zenobia16@10.3.56.116/cam/realmonitor?channel=2&subtype=0"
 modelPath = "./modelos/beta01.pt"
-confThreshold = 0.01
-captureInterval = 5  # segundos entre detecciones
+confThreshold = 0.5
+captureInterval = 10
 temporalDir = "./frames_temp"
 
 
