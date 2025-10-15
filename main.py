@@ -11,87 +11,82 @@ load_dotenv()
 
 # ===================== CONFIGURACIÓN Y CREDENCIALES =====================
 
-# Obtener Token SAS de las variables de entorno
+# obtener token SAS de las variables de entorno
 tokenSas = os.getenv("TOKENSAS")
 if not tokenSas:
-    raise ValueError("Error: La variable de entorno 'TOKENSAS' no estar definida.")
+    raise ValueError("Error: La variable de entorno 'TOKENSAS' no esta definida.")
 
-# Configuración de Azure (URL base del contenedor)
-# Asegurar que la URL base incluya el nombre de la cuenta y el contenedor
-AZURE_CONTAINER_URL = "https://thermalalmacen.blob.core.windows.net/fotos"
-API_URL = "http://4.155.33.198:8000/images/with-detections" # Ajustar la URL de tu API
+# configurar URL base del contenedor de Azure
+azureContainerUrl = "https://thermalalmacen.blob.core.windows.net/fotos"
+apiUrl = "http://4.155.33.198:8000/images/with-detections"
 
-# Configuración del modelo y captura
-RTSP_URL = "rtsp://lizardi:zenobia16@10.3.56.116/cam/realmonitor?channel=2&subtype=0"
-RUTA_MODELO = "./modelos/beta01.pt" # Asegurar que esta ruta sea correcta
-CONF_THRESHOLD = 0.6
-INTERVALO_CAPTURAR = 5  # Segundos entre detecciones
-TEMPORAL_DIR = "./frames_temp"
+# configurar modelo y captura
+rtspUrl = "rtsp://lizardi:zenobia16@10.3.56.116/cam/realmonitor?channel=2&subtype=0"
+modelPath = "./modelos/beta01.pt"
+confThreshold = 0.01
+captureInterval = 5  # segundos entre detecciones
+temporalDir = "./frames_temp"
 
 
-# Asegurar carpeta temporal
-os.makedirs(TEMPORAL_DIR, exist_ok=True)
+# asegurar que la carpeta temporal exista
+os.makedirs(temporalDir, exist_ok=True)
 
-# Cargar el modelo YOLO
+# cargar el modelo YOLO
 try:
-    modelo = YOLO(RUTA_MODELO)
+    model = YOLO(modelPath)
 except Exception as error:
     print(f"Error al cargar el modelo YOLO: {error}")
     exit()
 
 
-def subirAzure(rutaLocal, nombreArchivo):
-    """Subir la imagen anotada a Azure Blob Storage usando el Token SAS."""
-    # Construir la URL completa para la subida PUT (blob_url)
-    # Se añade el nombre del archivo y el token SAS
-    blobUrl = f"{AZURE_CONTAINER_URL}/{nombreArchivo}?{tokenSas}"
+def subirAzure(localPath, fileName):
+    """Subir la imagen a Azure Blob Storage usando el Token SAS."""
+    blobUrl = f"{azureContainerUrl}/{fileName}?{tokenSas}"
 
     try:
-        with open(rutaLocal, "rb") as archivo:
-            # Usar requests.put para subir el archivo (necesario con SAS)
+        with open(localPath, "rb") as file:
+            # usar requests.put para subir el archivo
             response = requests.put(
                 blobUrl,
-                data=archivo,
+                data=file,
                 headers={
-                    'x-ms-blob-type': 'BlockBlob', # Tipo de blob necesario para la subida
-                    'Content-Type': 'image/jpeg' # Tipo de contenido
+                    'x-ms-blob-type': 'BlockBlob',
+                    'Content-Type': 'image/jpeg'
                 }
             )
 
         if response.status_code == 201:
-            print(f"[Azure] Subir con éxito: {nombreArchivo}")
-            return f"{AZURE_CONTAINER_URL}/{nombreArchivo}" # Devolver la URL pública sin el token SAS
+            print(f"[Azure] Subida exitosa: {fileName}")
+            # devolver la URL publica sin el token
+            return f"{azureContainerUrl}/{fileName}"
         else:
-            print(f"[Azure] Error {response.status_code} al subir {nombreArchivo}: {response.text}")
+            print(f"[Azure] Error {response.status_code} al subir {fileName}: {response.text}")
             return None
     except Exception as error:
-        print(f"[Azure] Excepción al subir a Azure: {error}")
+        print(f"[Azure] Excepcion al subir a Azure: {error}")
         return None
 
 
-def enviarApi(urlImagen, listaDetecciones):
-    """Enviar datos de la detección (URL y Bounding Boxes) a la API del servidor."""
-    payload = {
-        "urlImagen": urlImagen,
-        "detecciones": listaDetecciones
-    }
+def enviarApi(imageUrl, detectionList):
+    """Enviar datos de la deteccion (URL y Bounding Boxes) a la API."""
     try:
-        respuesta = requests.post(API_URL, json=payload)
-        if respuesta.status_code in [200, 201]:
-            print(f"[API] Registro correcto para {os.path.basename(urlImagen)}")
+        response = requests.post(f"{apiUrl}?image_path={imageUrl}", json=detectionList)
+
+        if response.status_code in [200, 201]:
+            print(f"[API] Registro correcto para {os.path.basename(imageUrl)}")
         else:
-            print(f"[API] Error {respuesta.status_code} al registrar: {respuesta.text}")
+            print(f"[API] Error {response.status_code} al registrar: {response.text}")
     except Exception as error:
         print(f"[API] Error al comunicar con el servidor: {error}")
 
 
 def ejecutarCaptura():
-    """Bucle principal de captura, detección y subida."""
+    """Bucle principal de captura, deteccion y subida."""
     # cap = cv2.VideoCapture(RTSP_URL) # Usar stream real
-    cap = cv2.VideoCapture(0) # Usar cámara local para pruebas
+    cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
-        print("Error: No poder conectar al stream de video.")
+        print("Error: No se pudo conectar al stream de video.")
         return
 
     print("Capturando frames, detectando y subiendo a Azure...")
@@ -100,61 +95,62 @@ def ejecutarCaptura():
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("No poder leer frame. Reintentar...")
+                print("No se pudo leer el frame. Reintentando...")
                 time.sleep(1)
                 continue
 
             # 1. Preparar nombres y rutas
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            nombreArchivo = f"frame_{timestamp}_{uuid.uuid4().hex[:6]}.jpg" # ID único para evitar colisiones
-            rutaLocal = os.path.join(TEMPORAL_DIR, nombreArchivo)
+            fileName = f"frame_{timestamp}_{uuid.uuid4().hex[:6]}.jpg"
+            localPath = os.path.join(temporalDir, fileName)
 
             # 2. Guardar imagen temporal
-            cv2.imwrite(rutaLocal, frame)
+            cv2.imwrite(localPath, frame)
 
             # 3. Ejecutar modelo YOLO
-            resultados = modelo(rutaLocal, conf=CONF_THRESHOLD, iou=0.45, verbose=False)
-            deteccionesYolo = resultados[0].boxes
+            results = model(localPath, conf=confThreshold, iou=0.45, verbose=False)
+            yoloDetections = results[0].boxes
 
-            listaDetecciones = []
+            detectionList = []
 
-            if len(deteccionesYolo) > 0:
-                print(f"🚬 Detectar {len(deteccionesYolo)} objeto(s). Procesar...")
+            if len(yoloDetections) > 0:
+                print(f"Cigarros Detectados {len(yoloDetections)} objeto(s). Procesando...")
 
-                # Anotar el frame y guardar la imagen anotada
-                frameAnotado = resultados[0].plot()
-                cv2.imwrite(rutaLocal, frameAnotado)
+                # anotar el frame y guardar la imagen anotada
+                annotatedFrame = results[0].plot()
+                cv2.imwrite(localPath, annotatedFrame)
 
-                # Construir la lista de detecciones para la API
-                for det in deteccionesYolo:
-                    confianza = float(det.conf[0])
+                for det in yoloDetections:
+                    confidence = float(det.conf[0])
                     x1, y1, x2, y2 = map(int, det.xyxy[0])
-                    clase = int(det.cls[0])
-                    listaDetecciones.append({
-                        "clase": clase,
-                        "confianza": confianza,
-                        "bbox": [x1, y1, x2, y2]
+                    detectionList.append({
+                        "confianza": confidence,
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2
                     })
 
                 # 4. Subir imagen a Azure
-                urlAzure = subirAzure(rutaLocal, nombreArchivo)
+                azureUrl = subirAzure(localPath, fileName)
 
                 # 5. Enviar a la API
-                if urlAzure:
-                    enviarApi(urlAzure, listaDetecciones)
+                if azureUrl:
+                    enviarApi(azureUrl, detectionList)
 
-            # 6. Limpiar archivo temporal (siempre)
-            #os.remove(rutaLocal)
+            # 6. Limpiar archivo temporal
+            os.remove(localPath)
 
-            time.sleep(INTERVALO_CAPTURAR)
+            time.sleep(captureInterval)
 
     except KeyboardInterrupt:
-        print("\nCaptura detener por el usuario.")
+        print("\nCaptura detenida.")
     finally:
         cap.release()
-        # Limpiar cualquier archivo temporal restante
-        for archivo in os.listdir(TEMPORAL_DIR):
-            os.remove(os.path.join(TEMPORAL_DIR, archivo))
+        # limpiar cualquier archivo temporal restante al salir
+        for file in os.listdir(temporalDir):
+            os.remove(os.path.join(temporalDir, file))
+
 
 if __name__ == "__main__":
     ejecutarCaptura()
