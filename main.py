@@ -348,7 +348,7 @@ class ThermalMonitorClient:
 
             # Si hay evento activo, enviar imagen con detecciones
             imagen_path = self.guardar_frame_temporal(frame)
-            
+
             if self.id_evento_activo is not None:
                 # imagen_path = self.guardar_frame_temporal(frame)
                 if imagen_path:
@@ -451,7 +451,7 @@ def main():
 
     cliente = ThermalMonitorClient(
         # rtspUrl = "rtsp://lizardi:zenobia16@10.3.57.103/cam/realmonitor?channel=2&subtype=0"
-        camera_source="rtsp://192.168.0.152:8554/stream",
+        camera_source="rtsp://192.168.0.208:8554/stream",
         api_base_url="http://4.155.33.198:8000",
         username="userweb",
         password="password",
