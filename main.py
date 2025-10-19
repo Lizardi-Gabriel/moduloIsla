@@ -87,7 +87,7 @@ class ThermalMonitorClient:
             self.cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
 
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Solo 1 frame en buffer
-            
+
             logger.info(f"Conectando a cámara RTSP/URL: {self.camera_source}")
 
             if not self.cap.isOpened():
@@ -347,8 +347,10 @@ class ThermalMonitorClient:
                         logger.info("Estado: EVENTO ACTIVO")
 
             # Si hay evento activo, enviar imagen con detecciones
+            imagen_path = self.guardar_frame_temporal(frame)
+            
             if self.id_evento_activo is not None:
-                imagen_path = self.guardar_frame_temporal(frame)
+                # imagen_path = self.guardar_frame_temporal(frame)
                 if imagen_path:
                     self.enviar_imagen_con_detecciones(
                         imagen_path,
