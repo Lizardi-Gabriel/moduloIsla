@@ -85,6 +85,9 @@ class ThermalMonitorClient:
                 self.cap.release()
 
             self.cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
+
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Solo 1 frame en buffer
+            
             logger.info(f"Conectando a cámara RTSP/URL: {self.camera_source}")
 
             if not self.cap.isOpened():
