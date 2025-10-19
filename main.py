@@ -62,6 +62,12 @@ class ThermalMonitorClient:
         self.token: Optional[str] = None
         self.running = False
 
+        # NUEVO: Thread de lectura continua
+        self.frame_actual = None
+        self.frame_lock = threading.Lock()
+        self.thread_lectura = None
+        self.thread_lectura_running = False
+
         # Estado de detección
         self.estado_actual = "sin_deteccion"
         self.id_evento_activo: Optional[int] = None
@@ -85,15 +91,12 @@ class ThermalMonitorClient:
                 self.cap.release()
 
             self.cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
-
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Solo 1 frame en buffer
-
             logger.info(f"Conectando a cámara RTSP/URL: {self.camera_source}")
 
             if not self.cap.isOpened():
                 logger.error("No se pudo abrir la cámara")
                 return False
-            
+
             # Verificar que se pueda leer un frame
             ret, frame = self.cap.read()
             if not ret or frame is None:
@@ -107,6 +110,62 @@ class ThermalMonitorClient:
         except Exception as e:
             logger.error(f"Error al inicializar cámara: {e}")
             return False
+
+    def _leer_frames_continuamente(self):
+        """
+        Thread que lee frames continuamente del stream RTSP.
+        Esto evita que el buffer se llene con frames viejos.
+        """
+        logger.info("Thread de lectura continua iniciado")
+
+        while self.thread_lectura_running:
+            try:
+                if self.cap and self.cap.isOpened():
+                    ret, frame = self.cap.read()
+
+                    if ret and frame is not None:
+                        # Actualizar el frame actual de forma thread-safe
+                        with self.frame_lock:
+                            self.frame_actual = frame.copy()
+                    else:
+                        logger.warning("No se pudo leer frame en thread continuo")
+                        time.sleep(0.5)
+
+                        # Intentar reconectar
+                        if not self.cap.isOpened():
+                            logger.warning("Stream cerrado, intentando reconectar...")
+                            self.inicializar_camara()
+                else:
+                    logger.warning("Cámara no disponible en thread")
+                    time.sleep(1)
+
+                # Pausa mínima para no saturar CPU (lee ~100 FPS máximo)
+                time.sleep(0.01)
+
+            except Exception as e:
+                logger.error(f"Error en thread de lectura: {e}")
+                time.sleep(1)
+
+        logger.info("Thread de lectura continua detenido")
+
+    def iniciar_lectura_continua(self):
+        """Iniciar el thread de lectura continua"""
+        if self.thread_lectura is not None and self.thread_lectura.is_alive():
+            logger.warning("Thread de lectura ya está corriendo")
+            return
+
+        self.thread_lectura_running = True
+        self.thread_lectura = threading.Thread(target=self._leer_frames_continuamente)
+        self.thread_lectura.daemon = True
+        self.thread_lectura.start()
+        logger.info("Thread de lectura continua iniciado")
+
+    def detener_lectura_continua(self):
+        """Detener el thread de lectura continua"""
+        if self.thread_lectura is not None:
+            self.thread_lectura_running = False
+            self.thread_lectura.join(timeout=3)
+            logger.info("Thread de lectura continua detenido")
 
     def verificar_camara(self) -> bool:
         """Verificar si la cámara está activa y reconectarla si es necesario"""
@@ -155,21 +214,16 @@ class ThermalMonitorClient:
         }
 
     def capturar_frame(self) -> Optional[np.ndarray]:
-        """Capturar un frame de la cámara"""
-        if not self.verificar_camara():
-            return None
-
-        # NUEVO: Vaciar buffer leyendo y descartando frames
-        for _ in range(5):  # Descarta 5 frames viejos
-            self.cap.grab()
-
-        # Ahora sí lee el frame actual
-        ret, frame = self.cap.read()
-        if not ret:
-            logger.warning("No se pudo capturar frame")
-            return None
-
-        return frame
+        """
+        Obtener el frame más reciente del thread de lectura continua.
+        Ya no lee directamente de la cámara.
+        """
+        with self.frame_lock:
+            if self.frame_actual is not None:
+                return self.frame_actual.copy()
+            else:
+                logger.warning("No hay frame disponible aún")
+                return None
 
     def detectar_objetos(self, frame: np.ndarray) -> List[Dict]:
         """Ejecutar detección YOLO en un frame"""
@@ -352,10 +406,8 @@ class ThermalMonitorClient:
                         logger.info("Estado: EVENTO ACTIVO")
 
             # Si hay evento activo, enviar imagen con detecciones
-            imagen_path = self.guardar_frame_temporal(frame)
-
             if self.id_evento_activo is not None:
-                # imagen_path = self.guardar_frame_temporal(frame)
+                imagen_path = self.guardar_frame_temporal(frame)
                 if imagen_path:
                     self.enviar_imagen_con_detecciones(
                         imagen_path,
@@ -402,7 +454,7 @@ class ThermalMonitorClient:
                         ultimo_capture = tiempo_actual
 
                     else:
-                        logger.warning("Frame vacío, reintentando...")
+                        logger.warning("Frame no disponible, esperando...")
                         time.sleep(1)
 
                 # Pequeña pausa para no saturar CPU
@@ -432,6 +484,12 @@ class ThermalMonitorClient:
             logger.error("No se pudo autenticar con la API")
             return
 
+        # Iniciar thread de lectura continua
+        self.iniciar_lectura_continua()
+
+        # Esperar un momento para que el thread capture el primer frame
+        time.sleep(1)
+
         # Iniciar ciclo principal
         self.running = True
         try:
@@ -443,6 +501,9 @@ class ThermalMonitorClient:
         """Detener cliente y liberar recursos"""
         logger.info("Deteniendo cliente...")
         self.running = False
+
+        # NUEVO: Detener thread de lectura
+        self.detener_lectura_continua()
 
         if self.cap is not None:
             self.cap.release()
