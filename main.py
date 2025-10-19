@@ -90,15 +90,7 @@ class ThermalMonitorClient:
             if not self.cap.isOpened():
                 logger.error("No se pudo abrir la cámara")
                 return False
-
-            # Configurar propiedades de la cámara
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-            # Para cámaras RTSP, configurar buffer mínimo para reducir latencia
-            if isinstance(self.camera_source, str):
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
+            
             # Verificar que se pueda leer un frame
             ret, frame = self.cap.read()
             if not ret or frame is None:

@@ -1,0 +1,31 @@
+
+
+
+simular transmision de video rtsp:
+
+
+# descargar mediamtx
+cd ~
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_linux_amd64.tar.gz
+
+# extraer
+tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
+
+# iniciar servidor (dejar corriendo en una terminal)
+./mediamtx
+
+
+Deberías ver:
+INF MediaMTX v1.9.0
+INF [RTSP] listener opened on :8554
+
+
+
+Paso 2: En otra terminal, enviar el video
+
+
+cd ~/Documents/videoRtsp
+
+# enviar video al servidor mediamtx
+ffmpeg -re -stream_loop -1 -i fumar.mp4 -c copy -f rtsp rtsp://localhost:8554/stream
+
