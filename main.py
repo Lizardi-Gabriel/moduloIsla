@@ -455,7 +455,7 @@ def main():
     cliente = ThermalMonitorClient(
         # rtspUrl = "rtsp://lizardi:zenobia16@10.3.57.103/cam/realmonitor?channel=2&subtype=0"
         camera_source="rtsp://192.168.0.152:8554/stream",
-        api_base_url="http://localhost:8000",
+        api_base_url="http://4.155.33.198:8000",
         username="userweb",
         password="password",
         model_path="./modelos/beta02.pt",

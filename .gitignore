@@ -1,2 +1,4 @@
 .env
 /.idea
+.DS_Store
+thermal_monitor.log
