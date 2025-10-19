@@ -159,6 +159,11 @@ class ThermalMonitorClient:
         if not self.verificar_camara():
             return None
 
+        # NUEVO: Vaciar buffer leyendo y descartando frames
+        for _ in range(5):  # Descarta 5 frames viejos
+            self.cap.grab()
+
+        # Ahora sí lee el frame actual
         ret, frame = self.cap.read()
         if not ret:
             logger.warning("No se pudo capturar frame")
