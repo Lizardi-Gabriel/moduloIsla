@@ -38,7 +38,10 @@ class ThermalMonitorClient:
             azure_container_url: str = None,
             azure_token_sas: str = None,
             max_errores_consecutivos: int = 5,
-            timeout_reconexion: int = 10
+            timeout_reconexion: int = 10,
+            intervalo_heartbeat: int = 300,
+            hora_inicio: int = 6,
+            hora_fin: int = 21
     ):
         self.camera_source = camera_source
         self.api_base_url = api_base_url.rstrip('/')
@@ -75,19 +78,115 @@ class ThermalMonitorClient:
         self.umbral_crear_evento = 3
         self.umbral_cerrar_evento = 5
 
-        # Configurar parámetros de reconexión
         self.max_errores_consecutivos = max_errores_consecutivos
         self.timeout_reconexion = timeout_reconexion
         self.errores_consecutivos = 0
         self.ultima_reconexion = 0
 
+        self.intervalo_heartbeat = intervalo_heartbeat
+        self.ultimo_heartbeat = 0
+        self.thread_heartbeat = None
+        self.thread_heartbeat_running = False
+
+        self.hora_inicio = hora_inicio
+        self.hora_fin = hora_fin
+
         self.temp_dir = Path("temp_images")
         self.temp_dir.mkdir(exist_ok=True)
+
+    def enviar_log_api(self, tipo: str, mensaje: str):
+        """Enviar log al endpoint de la API"""
+        def _enviar():
+            try:
+                if not self.token:
+                    return
+
+                response = requests.post(
+                    f"{self.api_base_url}/logs",
+                    json={
+                        "tipo": tipo,
+                        "mensaje": mensaje
+                    },
+                    headers=self.obtener_headers(),
+                    timeout=10
+                )
+
+                if response.status_code != 201:
+                    logger.warning(f"Error al enviar log a API: {response.status_code}")
+
+            except Exception as e:
+                logger.warning(f"Excepción al enviar log a API: {e}")
+
+        thread = threading.Thread(target=_enviar)
+        thread.daemon = True
+        thread.start()
+
+    def esta_en_horario_operacion(self) -> bool:
+        """Verificar si se encuentra en horario de operación"""
+        hora_actual = datetime.now().hour
+        return self.hora_inicio <= hora_actual < self.hora_fin
+
+    def _heartbeat_loop(self):
+        """Enviar heartbeat periódico a la API"""
+        logger.info("Thread de heartbeat iniciado")
+
+        while self.thread_heartbeat_running:
+            try:
+                tiempo_actual = time.time()
+
+                if tiempo_actual - self.ultimo_heartbeat >= self.intervalo_heartbeat:
+                    en_horario = self.esta_en_horario_operacion()
+
+                    if en_horario:
+                        mensaje_heartbeat = (
+                            f"Sistema operando normalmente. "
+                            f"Estado: {self.estado_actual}, "
+                            f"Errores stream: {self.errores_consecutivos}, "
+                            f"Evento activo: {self.id_evento_activo is not None}"
+                        )
+                    else:
+                        hora_actual = datetime.now().strftime("%H:%M")
+                        mensaje_heartbeat = (
+                            f"Sistema fuera de horario operativo ({hora_actual}). "
+                            f"Horario: {self.hora_inicio:02d}:00 - {self.hora_fin:02d}:00. "
+                            f"Monitoreo en espera, conexión activa."
+                        )
+
+                    self.enviar_log_api("info", mensaje_heartbeat)
+                    logger.info(f"Heartbeat enviado a API - En horario: {en_horario}")
+                    self.ultimo_heartbeat = tiempo_actual
+
+                time.sleep(30)
+
+            except Exception as e:
+                logger.error(f"Error en thread de heartbeat: {e}")
+                time.sleep(30)
+
+        logger.info("Thread de heartbeat detenido")
+
+    def iniciar_heartbeat(self):
+        """Iniciar thread de heartbeat"""
+        if self.thread_heartbeat is not None and self.thread_heartbeat.is_alive():
+            logger.warning("Thread de heartbeat ya está corriendo")
+            return
+
+        self.ultimo_heartbeat = time.time()
+        self.thread_heartbeat_running = True
+        self.thread_heartbeat = threading.Thread(target=self._heartbeat_loop)
+        self.thread_heartbeat.daemon = True
+        self.thread_heartbeat.start()
+        logger.info("Thread de heartbeat iniciado")
+
+    def detener_heartbeat(self):
+        """Detener thread de heartbeat"""
+        if self.thread_heartbeat is not None:
+            self.thread_heartbeat_running = False
+            self.thread_heartbeat.join(timeout=5)
+            logger.info("Thread de heartbeat detenido")
 
     def inicializar_camara(self) -> bool:
         """Inicializar conexión con la cámara"""
         try:
-            # Liberar recursos existentes
             if self.cap is not None:
                 try:
                     self.cap.release()
@@ -95,7 +194,6 @@ class ThermalMonitorClient:
                     logger.warning(f"Error al liberar cámara anterior: {e}")
                 self.cap = None
 
-            # Esperar antes de reconectar si es necesario
             tiempo_desde_ultima = time.time() - self.ultima_reconexion
             if tiempo_desde_ultima < 2:
                 time.sleep(2 - tiempo_desde_ultima)
@@ -103,22 +201,25 @@ class ThermalMonitorClient:
             logger.info(f"Conectando a cámara: {self.camera_source}")
             self.cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
 
-            # Configurar buffer mínimo para RTSP
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not self.cap.isOpened():
-                logger.error("No se pudo abrir la cámara")
+                error_msg = f"No se pudo abrir la cámara RTSP: {self.camera_source}"
+                logger.error(error_msg)
+                self.enviar_log_api("error", error_msg)
                 return False
 
-            # Verificar lectura de frame de prueba
             ret, frame = self.cap.read()
             if not ret or frame is None:
-                logger.error("No se pudo leer frame de prueba")
+                error_msg = "No se pudo leer frame de prueba de la cámara RTSP"
+                logger.error(error_msg)
+                self.enviar_log_api("error", error_msg)
                 self.cap.release()
                 self.cap = None
                 return False
 
             logger.info(f"Cámara inicializada - Resolución: {frame.shape[1]}x{frame.shape[0]}")
+            self.enviar_log_api("info", f"Cámara RTSP conectada exitosamente - Resolución: {frame.shape[1]}x{frame.shape[0]}")
 
             self.ultima_reconexion = time.time()
             self.errores_consecutivos = 0
@@ -126,7 +227,9 @@ class ThermalMonitorClient:
             return True
 
         except Exception as e:
-            logger.error(f"Error al inicializar cámara: {e}")
+            error_msg = f"Error crítico al inicializar cámara RTSP: {str(e)}"
+            logger.error(error_msg)
+            self.enviar_log_api("error", error_msg)
             self.cap = None
             return False
 
@@ -136,7 +239,6 @@ class ThermalMonitorClient:
             if self.cap is None or not self.cap.isOpened():
                 return False
 
-            # Verificar si se puede obtener propiedades básicas
             width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
             height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 
@@ -151,25 +253,38 @@ class ThermalMonitorClient:
 
     def _intentar_reconexion(self) -> bool:
         """Intentar reconectar al stream"""
-        logger.warning("Intentando reconexión al stream...")
+        advertencia_msg = f"Intentando reconexión al stream RTSP. Errores consecutivos: {self.errores_consecutivos}"
+        logger.warning(advertencia_msg)
+        self.enviar_log_api("advertencia", advertencia_msg)
 
         tiempo_actual = time.time()
 
-        # Evitar reconexiones muy frecuentes
         if tiempo_actual - self.ultima_reconexion < self.timeout_reconexion:
             tiempo_espera = self.timeout_reconexion - (tiempo_actual - self.ultima_reconexion)
             logger.info(f"Esperando {tiempo_espera:.1f}s antes de reconectar...")
             time.sleep(tiempo_espera)
 
-        return self.inicializar_camara()
+        resultado = self.inicializar_camara()
+
+        if not resultado:
+            error_msg = f"Reconexión fallida al stream RTSP después de {self.errores_consecutivos} intentos"
+            logger.error(error_msg)
+            self.enviar_log_api("error", error_msg)
+
+        return resultado
 
     def _leer_frames_continuamente(self):
-        """Thread que lee frames continuamente del stream RTSP con reconexión automática"""
+        """Leer frames continuamente del stream RTSP con reconexión automática"""
         logger.info("Thread de lectura continua iniciado")
 
         while self.thread_lectura_running:
             try:
-                # Verificar estado del stream
+                # Verificar si está en horario de operación
+                if not self.esta_en_horario_operacion():
+                    # Fuera de horario, solo dormir y continuar
+                    time.sleep(10)
+                    continue
+
                 if not self._verificar_estado_stream():
                     logger.warning("Stream en mal estado, intentando reconectar...")
                     if self._intentar_reconexion():
@@ -182,27 +297,26 @@ class ThermalMonitorClient:
                         time.sleep(5)
                         continue
 
-                # Intentar leer frame
                 ret, frame = self.cap.read()
 
                 if ret and frame is not None and frame.size > 0:
-                    # Actualizar frame actual de forma thread-safe
                     with self.frame_lock:
                         self.frame_actual = frame.copy()
 
-                    # Resetear contador de errores
                     self.errores_consecutivos = 0
 
                 else:
-                    # Incrementar contador de errores
                     self.errores_consecutivos += 1
                     logger.warning(f"No se pudo leer frame (error {self.errores_consecutivos}/{self.max_errores_consecutivos})")
 
-                    # Si hay muchos errores consecutivos, reconectar
                     if self.errores_consecutivos >= self.max_errores_consecutivos:
-                        logger.error("Demasiados errores consecutivos, forzando reconexión...")
+                        error_msg = f"Demasiados errores consecutivos ({self.errores_consecutivos}) en lectura de stream RTSP, forzando reconexión"
+                        logger.error(error_msg)
+                        self.enviar_log_api("error", error_msg)
+
                         if self._intentar_reconexion():
                             logger.info("Reconexión exitosa después de errores")
+                            self.enviar_log_api("info", "Reconexión exitosa al stream RTSP después de múltiples errores")
                             self.errores_consecutivos = 0
                         else:
                             logger.error("Reconexión fallida después de errores")
@@ -210,14 +324,14 @@ class ThermalMonitorClient:
                     else:
                         time.sleep(0.5)
 
-                # Pausa mínima para no saturar CPU
                 time.sleep(0.01)
 
             except Exception as e:
                 self.errores_consecutivos += 1
-                logger.error(f"Error en thread de lectura ({self.errores_consecutivos}): {e}")
+                error_msg = f"Excepción en thread de lectura RTSP ({self.errores_consecutivos}): {str(e)}"
+                logger.error(error_msg)
+                self.enviar_log_api("error", error_msg)
 
-                # Intentar reconectar si hay muchos errores
                 if self.errores_consecutivos >= self.max_errores_consecutivos:
                     self._intentar_reconexion()
 
@@ -257,9 +371,12 @@ class ThermalMonitorClient:
         try:
             self.model = YOLO(self.model_path)
             logger.info(f"Modelo YOLO cargado desde {self.model_path}")
+            self.enviar_log_api("info", f"Modelo YOLO cargado exitosamente desde {self.model_path}")
             return True
         except Exception as e:
-            logger.error(f"Error al cargar modelo YOLO: {e}")
+            error_msg = f"Error al cargar modelo YOLO: {str(e)}"
+            logger.error(error_msg)
+            self.enviar_log_api("error", error_msg)
             return False
 
     def autenticar(self) -> bool:
@@ -278,11 +395,13 @@ class ThermalMonitorClient:
                 logger.info("Autenticación exitosa")
                 return True
             else:
-                logger.error(f"Error de autenticación: {response.status_code}")
+                error_msg = f"Error de autenticación con API: {response.status_code}"
+                logger.error(error_msg)
                 return False
 
         except Exception as e:
-            logger.error(f"Error al autenticar: {e}")
+            error_msg = f"Error al autenticar con API: {str(e)}"
+            logger.error(error_msg)
             return False
 
     def obtener_headers(self) -> Dict[str, str]:
@@ -354,13 +473,18 @@ class ThermalMonitorClient:
             if response.status_code == 201:
                 evento_id = response.json()["evento_id"]
                 logger.info(f"Evento creado con ID: {evento_id}")
+                self.enviar_log_api("info", f"Nuevo evento creado con ID: {evento_id}")
                 return evento_id
             else:
-                logger.error(f"Error al crear evento: {response.status_code}")
+                error_msg = f"Error al crear evento en API: {response.status_code}"
+                logger.error(error_msg)
+                self.enviar_log_api("error", error_msg)
                 return None
 
         except Exception as e:
-            logger.error(f"Error al crear evento: {e}")
+            error_msg = f"Excepción al crear evento: {str(e)}"
+            logger.error(error_msg)
+            self.enviar_log_api("error", error_msg)
             return None
 
     def subir_a_azure(self, local_path: str, file_name: str) -> Optional[str]:
@@ -416,6 +540,7 @@ class ThermalMonitorClient:
                 if not azure_url:
                     resultado['error'] = 'Fallo subida Azure'
                     logger.error(f"PIPELINE FALLIDO | {resultado}")
+                    self.enviar_log_api("error", f"Fallo al subir imagen a Azure: {file_name}")
                     return
 
                 resultado['azure_subida'] = True
@@ -438,6 +563,7 @@ class ThermalMonitorClient:
                 else:
                     resultado['error'] = f'API error {response.status_code}'
                     logger.error(f"PIPELINE FALLIDO | {resultado}")
+                    self.enviar_log_api("error", f"Error al enviar imagen a API: {response.status_code} - {file_name}")
                     return
 
                 try:
@@ -452,6 +578,7 @@ class ThermalMonitorClient:
             except Exception as e:
                 resultado['error'] = str(e)
                 logger.error(f"PIPELINE FALLIDO | {resultado}")
+                self.enviar_log_api("error", f"Excepción en pipeline de imagen: {str(e)}")
 
         thread = threading.Thread(target=_enviar)
         thread.daemon = True
@@ -472,6 +599,7 @@ class ThermalMonitorClient:
             if self.contador_sin_deteccion >= self.umbral_cerrar_evento:
                 if self.id_evento_activo is not None:
                     logger.info(f"Cerrando evento {self.id_evento_activo}")
+                    self.enviar_log_api("info", f"Evento cerrado: {self.id_evento_activo} - Sin detecciones por tiempo prolongado")
                     self.id_evento_activo = None
                     self.estado_actual = "sin_deteccion"
                 self.contador_sin_deteccion = 0
@@ -509,11 +637,25 @@ class ThermalMonitorClient:
     def ejecutar_ciclo(self):
         """Ejecutar ciclo principal de monitoreo"""
         logger.info("Iniciando ciclo de monitoreo...")
+        self.enviar_log_api("info", "Sistema de monitoreo térmico iniciado correctamente")
 
         ultimo_capture = time.time()
+        ultimo_log_fuera_horario = 0
 
         while self.running:
             try:
+                # Verificar si está en horario de operación
+                if not self.esta_en_horario_operacion():
+                    # Mostrar mensaje periódico de que está fuera de horario
+                    tiempo_actual = time.time()
+                    if tiempo_actual - ultimo_log_fuera_horario >= 300:
+                        hora_actual = datetime.now().strftime("%H:%M")
+                        logger.info(f"Fuera de horario operativo ({hora_actual}). Esperando horario {self.hora_inicio:02d}:00 - {self.hora_fin:02d}:00")
+                        ultimo_log_fuera_horario = tiempo_actual
+
+                    time.sleep(30)
+                    continue
+
                 tiempo_actual = time.time()
                 tiempo_espera = self.obtener_tiempo_espera()
 
@@ -543,14 +685,18 @@ class ThermalMonitorClient:
 
             except KeyboardInterrupt:
                 logger.info("Interrupción por usuario")
+                self.enviar_log_api("advertencia", "Sistema detenido por usuario")
                 break
             except Exception as e:
-                logger.error(f"Error en ciclo principal: {e}")
+                error_msg = f"Error en ciclo principal: {str(e)}"
+                logger.error(error_msg)
+                self.enviar_log_api("error", error_msg)
                 time.sleep(5)
 
     def iniciar(self):
         """Iniciar cliente de monitoreo"""
         logger.info("Iniciando cliente de monitoreo térmico...")
+        logger.info(f"Horario de operación configurado: {self.hora_inicio:02d}:00 - {self.hora_fin:02d}:00")
 
         if not self.inicializar_camara():
             logger.error("No se pudo inicializar la cámara")
@@ -565,6 +711,7 @@ class ThermalMonitorClient:
             return
 
         self.iniciar_lectura_continua()
+        self.iniciar_heartbeat()
 
         time.sleep(2)
 
@@ -577,8 +724,10 @@ class ThermalMonitorClient:
     def detener(self):
         """Detener cliente y liberar recursos"""
         logger.info("Deteniendo cliente...")
+        self.enviar_log_api("advertencia", "Sistema de monitoreo térmico detenido")
         self.running = False
 
+        self.detener_heartbeat()
         self.detener_lectura_continua()
 
         if self.cap is not None:
@@ -593,7 +742,7 @@ class ThermalMonitorClient:
 
 
 def main():
-    """Función principal para ejecutar el cliente"""
+    """Ejecutar el cliente"""
 
     cliente = ThermalMonitorClient(
         # rtspUrl = "rtsp://lizardi:zenobia16@10.3.57.103/cam/realmonitor?channel=2&subtype=0"
@@ -604,7 +753,10 @@ def main():
         model_path="./modelos/beta02.pt",
         confidence_threshold=0.5,
         max_errores_consecutivos=5,
-        timeout_reconexion=10
+        timeout_reconexion=10,
+        intervalo_heartbeat=300,
+        hora_inicio=6,
+        hora_fin=21
     )
 
     try:
