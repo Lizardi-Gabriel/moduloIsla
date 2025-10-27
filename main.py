@@ -51,7 +51,7 @@ def main():
         timeout_reconexion=10,
         intervalo_heartbeat=300,
         hora_inicio=6,
-        hora_fin=23 # 21
+        hora_fin=21 # 21
     )
 
     monitor = ThermalMonitor(config)
