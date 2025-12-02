@@ -12,6 +12,7 @@ class Config:
     """Configuracion del sistema de monitoreo termico"""
 
     camera_source: str
+    context_camera_source: str
     api_base_url: str
     username: str
     password: str
@@ -45,6 +46,7 @@ class Config:
         config_dict = {
             'azure_container_url': os.getenv("AZURE_CONTAINER_URL"),
             'azure_token_sas': os.getenv("TOKENSAS"),
+            'context_camera_source': os.getenv("CONTEXT_CAMERA_SOURCE"),
         }
 
         config_dict.update(kwargs)

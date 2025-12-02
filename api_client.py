@@ -1,6 +1,8 @@
 import requests
 import threading
 import logging
+import base64
+import cv2
 from typing import Optional, Dict, List
 from datetime import date
 
@@ -159,3 +161,41 @@ class APIClient:
         thread = threading.Thread(target=_enviar)
         thread.daemon = True
         thread.start()
+
+    def enviar_imagen_contexto_b64(self, evento_id: int, frame_contexto) -> bool:
+        """Codificar imagen a Base64 y enviarla para descripcion"""
+        def _enviar():
+            try:
+                # Codificar frame a JPG
+                _, buffer = cv2.imencode('.jpg', frame_contexto)
+                # Convertir a Base64 string
+                jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+
+                payload = {
+                    "imagen_base64": jpg_as_text,
+                }
+
+                # endpoint
+                url = f"{self.api_base_url}/eventos/{evento_id}/descripcion"
+
+                logger.info(f"Enviando imagen de contexto (Base64) para evento {evento_id}...")
+
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers=self._obtener_headers(),
+                    timeout=30
+                )
+
+                if response.status_code in [200, 201]:
+                    logger.info(f"Imagen de contexto enviada con exito. Evento: {evento_id}")
+                else:
+                    logger.error(f"Error al enviar imagen contexto: {response.status_code} - {response.text}")
+
+            except Exception as e:
+                logger.error(f"Excepcion enviando imagen contexto: {str(e)}")
+
+        thread = threading.Thread(target=_enviar)
+        thread.daemon = True
+        thread.start()
+        return True

@@ -30,6 +30,11 @@ class ThermalMonitor:
             timeout_reconexion=config.timeout_reconexion
         )
 
+        self.context_camera = CameraManager(
+            camera_source=config.context_camera_source,
+            max_errores_consecutivos=config.max_errores_consecutivos
+        )
+
         self.detector = DetectionService(
             model_path=config.model_path,
             confidence_threshold=config.confidence_threshold
@@ -47,6 +52,10 @@ class ThermalMonitor:
         )
 
         self.camera.set_callbacks(
+            on_error=self.api.enviar_log,
+            on_reconnect=lambda msg: self.api.enviar_log("info", msg)
+        )
+        self.context_camera.set_callbacks(
             on_error=self.api.enviar_log,
             on_reconnect=lambda msg: self.api.enviar_log("info", msg)
         )
@@ -211,6 +220,8 @@ class ThermalMonitor:
                         self.estado_actual = "evento_activo"
                         logger.info("Estado: EVENTO ACTIVO")
 
+                        self._capturar_y_enviar_contexto(self.id_evento_activo)
+
             if self.id_evento_activo is not None:
                 self.procesar_imagen_con_detecciones(
                     frame,
@@ -306,6 +317,12 @@ class ThermalMonitor:
             logger.error("No se pudo autenticar con la API")
             return
 
+        if self.config.context_camera_source:
+            if self.context_camera.inicializar():
+                self.context_camera.iniciar_lectura_continua(self.esta_en_horario_operacion)
+            else:
+                logger.warning("No se pudo iniciar camara de contexto")
+
         self.camera.iniciar_lectura_continua(self.esta_en_horario_operacion)
         self.iniciar_heartbeat()
 
@@ -326,4 +343,22 @@ class ThermalMonitor:
         self.detener_heartbeat()
         self.camera.liberar()
 
+        self.context_camera.liberar()
+
         logger.info("Sistema detenido")
+
+    def _capturar_y_enviar_contexto(self, evento_id: int):
+        """Captura frame de la cámara visual y lo envia en B64"""
+        try:
+            # Obtener el frame más reciente del buffer de la segunda cámara
+            frame_visual = self.context_camera.obtener_frame()
+
+            if frame_visual is not None:
+                # Enviar a la API
+                self.api.enviar_imagen_contexto_b64(evento_id, frame_visual)
+            else:
+                logger.warning("No se pudo obtener frame de contexto para el evento")
+                self.api.enviar_log("advertencia", f"Evento {evento_id}: Fallo captura cámara contexto")
+
+        except Exception as e:
+            logger.error(f"Error gestionando imagen contexto: {e}")
