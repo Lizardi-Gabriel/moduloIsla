@@ -13,7 +13,6 @@ from config import Config
 from camera_manager import CameraManager
 from detection_service import DetectionService
 from api_client import APIClient
-from azure_storage import AzureStorage
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +29,6 @@ class ThermalMonitor:
             timeout_reconexion=config.timeout_reconexion
         )
 
-        self.context_camera = CameraManager(
-            camera_source=config.context_camera_source,
-            max_errores_consecutivos=config.max_errores_consecutivos
-        )
-
         self.detector = DetectionService(
             model_path=config.model_path,
             confidence_threshold=config.confidence_threshold
@@ -46,16 +40,7 @@ class ThermalMonitor:
             password=config.password
         )
 
-        self.azure = AzureStorage(
-            container_url=config.azure_container_url,
-            token_sas=config.azure_token_sas
-        )
-
         self.camera.set_callbacks(
-            on_error=self.api.enviar_log,
-            on_reconnect=lambda msg: self.api.enviar_log("info", msg)
-        )
-        self.context_camera.set_callbacks(
             on_error=self.api.enviar_log,
             on_reconnect=lambda msg: self.api.enviar_log("info", msg)
         )
@@ -164,13 +149,6 @@ class ThermalMonitor:
         file_name = Path(imagen_path).name
         logger.info(f"CAPTURA | Archivo: {file_name} | Evento: {evento_id} | Detecciones: {len(detecciones)}")
 
-        azure_url = self.azure.subir_imagen(imagen_path, file_name)
-
-        if not azure_url:
-            logger.error(f"Error al subir imagen a Azure: {file_name}")
-            self.api.enviar_log("error", f"Fallo al subir imagen a Azure: {file_name}")
-            return
-
         def eliminar_archivo_temporal():
             try:
                 if os.path.exists(imagen_path):
@@ -181,7 +159,7 @@ class ThermalMonitor:
 
         self.api.enviar_imagen_con_detecciones(
             evento_id=evento_id,
-            azure_url=azure_url,
+            imagen_path=imagen_path,
             detecciones=detecciones,
             callback_eliminar_archivo=eliminar_archivo_temporal
         )
@@ -219,8 +197,6 @@ class ThermalMonitor:
                     if self.id_evento_activo:
                         self.estado_actual = "evento_activo"
                         logger.info("Estado: EVENTO ACTIVO")
-
-                        self._capturar_y_enviar_contexto(self.id_evento_activo)
 
             if self.id_evento_activo is not None:
                 self.procesar_imagen_con_detecciones(
@@ -317,12 +293,6 @@ class ThermalMonitor:
             logger.error("No se pudo autenticar con la API")
             return
 
-        if self.config.context_camera_source:
-            if self.context_camera.inicializar():
-                self.context_camera.iniciar_lectura_continua(self.esta_en_horario_operacion)
-            else:
-                logger.warning("No se pudo iniciar camara de contexto")
-
         self.camera.iniciar_lectura_continua(self.esta_en_horario_operacion)
         self.iniciar_heartbeat()
 
@@ -343,22 +313,4 @@ class ThermalMonitor:
         self.detener_heartbeat()
         self.camera.liberar()
 
-        self.context_camera.liberar()
-
         logger.info("Sistema detenido")
-
-    def _capturar_y_enviar_contexto(self, evento_id: int):
-        """Captura frame de la cámara visual y lo envia en B64"""
-        try:
-            # Obtener el frame más reciente del buffer de la segunda cámara
-            frame_visual = self.context_camera.obtener_frame()
-
-            if frame_visual is not None:
-                # Enviar a la API
-                self.api.enviar_imagen_contexto_b64(evento_id, frame_visual)
-            else:
-                logger.warning("No se pudo obtener frame de contexto para el evento")
-                self.api.enviar_log("advertencia", f"Evento {evento_id}: Fallo captura cámara contexto")
-
-        except Exception as e:
-            logger.error(f"Error gestionando imagen contexto: {e}")

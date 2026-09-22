@@ -3,3 +3,5 @@
 .DS_Store
 thermal_monitor.log
 /temp_images
+**/graphify-out
+**/__pycache__

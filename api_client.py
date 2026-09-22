@@ -3,6 +3,7 @@ import threading
 import logging
 import base64
 import cv2
+from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import date
 
@@ -107,35 +108,54 @@ class APIClient:
             self.enviar_log("error", f"Excepcion al crear evento: {str(e)}")
             return None
 
-    def enviar_imagen_con_detecciones(
-            self,
-            evento_id: int,
-            azure_url: str,
-            detecciones: List[Dict],
-            callback_eliminar_archivo
-    ):
-        """Enviar imagen y detecciones a la API de forma asincrona"""
-        def _enviar():
-            try:
-                payload = {
-                    "imagen": {
-                        "ruta_imagen": azure_url
-                    },
-                    "detecciones": detecciones
+    def subir_imagen_evento(self, evento_id: int, imagen_path: str, file_name: Optional[str] = None) -> bool:
+        """Subir imagen del evento al endpoint multipart/form-data del backend."""
+        try:
+            filename = file_name or Path(imagen_path).name
+            mime_type = "image/jpeg"
+            if filename.lower().endswith((".png", ".webp")):
+                mime_type = "image/png" if filename.lower().endswith(".png") else "image/webp"
+
+            with open(imagen_path, "rb") as file:
+                files = {
+                    "file": (filename, file, mime_type)
                 }
 
                 response = requests.post(
-                    f"{self.api_base_url}/eventos/{evento_id}/imagenes",
-                    json=payload,
-                    headers=self._obtener_headers()
+                    f"{self.api_base_url}/eventos/{evento_id}/imagenes/upload",
+                    files=files,
+                    headers=self._obtener_headers(),
+                    timeout=30
                 )
 
-                if response.status_code == 201:
-                    logger.info(f"Imagen enviada exitosamente a API - Evento: {evento_id}")
-                    callback_eliminar_archivo()
-                else:
-                    logger.error(f"Error al enviar imagen a API: {response.status_code}")
-                    self.enviar_log("error", f"Error al enviar imagen a API: {response.status_code}")
+            if response.status_code in (200, 201):
+                logger.info(f"Imagen subida al endpoint de evento {evento_id}: {response.text}")
+                return True
+
+            logger.error(f"Error al subir imagen del evento {evento_id}: {response.status_code} - {response.text}")
+            self.enviar_log("error", f"Error al subir imagen del evento {evento_id}: {response.status_code}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Excepcion al subir imagen del evento {evento_id}: {str(e)}")
+            self.enviar_log("error", f"Excepcion al subir imagen del evento {evento_id}: {str(e)}")
+            return False
+
+    def enviar_imagen_con_detecciones(
+            self,
+            evento_id: int,
+            imagen_path: str,
+            detecciones: List[Dict],
+            callback_eliminar_archivo
+    ):
+        """Enviar imagen del evento al backend y confirmar con detecciones."""
+        def _enviar():
+            try:
+                if not self.subir_imagen_evento(evento_id, imagen_path):
+                    return
+
+                logger.info(f"Imagen del evento {evento_id} enviada correctamente")
+                callback_eliminar_archivo()
 
             except Exception as e:
                 logger.error(f"Excepcion al enviar imagen a API: {str(e)}")

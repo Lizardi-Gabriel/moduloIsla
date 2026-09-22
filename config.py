@@ -12,7 +12,6 @@ class Config:
     """Configuracion del sistema de monitoreo termico"""
 
     camera_source: str
-    context_camera_source: str
     api_base_url: str
     username: str
     password: str
@@ -20,16 +19,13 @@ class Config:
 
     confidence_threshold: float = 0.5
 
-    azure_container_url: Optional[str] = None
-    azure_token_sas: Optional[str] = None
-
     max_errores_consecutivos: int = 5
     timeout_reconexion: int = 10
 
     intervalo_heartbeat: int = 300
 
     hora_inicio: int = 6
-    hora_fin: int = 21
+    hora_fin: int = 23
 
     tiempo_foto_sin_deteccion: int = 5
     tiempo_foto_con_deteccion: int = 2
@@ -43,11 +39,7 @@ class Config:
         """Crear configuracion desde variables de entorno y parametros"""
         load_dotenv()
 
-        config_dict = {
-            'azure_container_url': os.getenv("AZURE_CONTAINER_URL"),
-            'azure_token_sas': os.getenv("TOKENSAS"),
-            'context_camera_source': os.getenv("CONTEXT_CAMERA_SOURCE"),
-        }
+        config_dict = {}
 
         config_dict.update(kwargs)
 
@@ -78,9 +70,6 @@ class Config:
         if self.hora_fin < 0 or self.hora_fin > 23:
             logger.error("hora_fin debe estar entre 0 y 23")
             return False
-
-        if not self.azure_container_url or not self.azure_token_sas:
-            logger.warning("Configuracion de Azure incompleta. Las imagenes no se subiran a Azure.")
 
         return True
 
