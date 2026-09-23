@@ -146,20 +146,73 @@ class APIClient:
             evento_id: int,
             imagen_path: str,
             detecciones: List[Dict],
-            callback_eliminar_archivo
+            callback_eliminar_archivo=None
     ):
-        """Enviar imagen del evento al backend y confirmar con detecciones."""
+        """Primero subir la imagen y luego enviar su ruta con detecciones al backend."""
         def _enviar():
             try:
-                if not self.subir_imagen_evento(evento_id, imagen_path):
+                filename = Path(imagen_path).name
+                mime_type = "image/jpeg"
+                if filename.lower().endswith((".png", ".webp")):
+                    mime_type = "image/png" if filename.lower().endswith(".png") else "image/webp"
+
+                with open(imagen_path, "rb") as file:
+                    files = {"file": (filename, file, mime_type)}
+                    upload_response = requests.post(
+                        f"{self.api_base_url}/eventos/{evento_id}/imagenes/upload",
+                        files=files,
+                        headers=self._obtener_headers(),
+                        timeout=30
+                    )
+
+                if upload_response.status_code not in (200, 201):
+                    logger.error(
+                        f"Error al subir imagen al evento {evento_id}: "
+                        f"{upload_response.status_code} - {upload_response.text}"
+                    )
+                    self.enviar_log(
+                        "error",
+                        f"Error al subir imagen al evento {evento_id}: {upload_response.status_code}"
+                    )
                     return
 
-                logger.info(f"Imagen del evento {evento_id} enviada correctamente")
-                callback_eliminar_archivo()
+                logger.info(f"Imagen subida correctamente al evento {evento_id}")
+
+
+                upload_data = upload_response.json()
+
+                ruta_imagen_servidor = upload_data["url"]
+
+                payload = {
+                    "imagen": {
+                        "ruta_imagen": ruta_imagen_servidor
+                    },
+                    "detecciones": detecciones
+                }
+
+                response = requests.post(
+                    f"{self.api_base_url}/eventos/{evento_id}/imagenes",
+                    json=payload,
+                    headers=self._obtener_headers(),
+                    timeout=30
+                )
+
+                if response.status_code in (200, 201):
+                    logger.info(f"Imagen y detecciones enviadas exitosamente - Evento: {evento_id}")
+                    if callback_eliminar_archivo:
+                        callback_eliminar_archivo()
+                else:
+                    logger.error(
+                        f"Error al enviar imagen con detecciones a API: {response.status_code} - {response.text}"
+                    )
+                    self.enviar_log(
+                        "error",
+                        f"Error al enviar imagen con detecciones a API: {response.status_code}"
+                    )
 
             except Exception as e:
-                logger.error(f"Excepcion al enviar imagen a API: {str(e)}")
-                self.enviar_log("error", f"Excepcion al enviar imagen a API: {str(e)}")
+                logger.error(f"Excepcion al enviar imagen con detecciones a API: {str(e)}")
+                self.enviar_log("error", f"Excepcion al enviar imagen con detecciones a API: {str(e)}")
 
         thread = threading.Thread(target=_enviar)
         thread.daemon = True
