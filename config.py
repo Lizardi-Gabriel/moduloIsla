@@ -21,6 +21,7 @@ class Config:
 
     max_errores_consecutivos: int = 5
     timeout_reconexion: int = 10
+    max_antiguedad_frame: float = 5
 
     intervalo_heartbeat: int = 300
 
@@ -69,6 +70,10 @@ class Config:
 
         if self.hora_fin < 0 or self.hora_fin > 23:
             logger.error("hora_fin debe estar entre 0 y 23")
+            return False
+
+        if self.max_antiguedad_frame <= 0:
+            logger.error("max_antiguedad_frame debe ser mayor que cero")
             return False
 
         return True

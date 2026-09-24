@@ -31,11 +31,11 @@ class DetectionService:
             logger.error(f"Error al cargar modelo YOLO: {type(e).__name__}")
             return False
 
-    def detectar(self, frame: np.ndarray) -> List[Dict]:
-        """Ejecutar deteccion YOLO en un frame"""
+    def detectar(self, frame: np.ndarray) -> Optional[List[Dict]]:
+        """Devolver detecciones (incluida lista vacia) o None si el analisis falla."""
         if self.model is None:
             logger.error("Modelo no cargado")
-            return []
+            return None
 
         try:
             results = self.model(frame, conf=self.confidence_threshold, verbose=False)
@@ -59,4 +59,4 @@ class DetectionService:
 
         except Exception as e:
             logger.error(f"Error en deteccion: {type(e).__name__}")
-            return []
+            return None

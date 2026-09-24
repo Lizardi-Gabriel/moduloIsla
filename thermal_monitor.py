@@ -26,7 +26,8 @@ class ThermalMonitor:
         self.camera = CameraManager(
             camera_source=config.camera_source,
             max_errores_consecutivos=config.max_errores_consecutivos,
-            timeout_reconexion=config.timeout_reconexion
+            timeout_reconexion=config.timeout_reconexion,
+            max_antiguedad_frame=config.max_antiguedad_frame
         )
 
         self.detector = DetectionService(
@@ -65,6 +66,16 @@ class ThermalMonitor:
         hora_actual = datetime.now().hour
         return self.config.hora_inicio <= hora_actual < self.config.hora_fin
 
+    def obtener_mensaje_heartbeat(self):
+        salud = self.camera.obtener_estado()
+        edad = salud["antiguedad_segundos"]
+        ultimo = "sin cuadros recibidos" if edad is None else f"ultimo cuadro recibido hace {edad:.1f}s"
+        if not self.esta_en_horario_operacion():
+            estado = "en espera fuera de horario; camara no evaluada"
+        else:
+            estado = "camara recibiendo imagenes" if salud["disponible"] else "camara sin imagen reciente utilizable"
+        return f"Proceso activo | {estado} | {ultimo} | Evento: {self.id_evento_activo}"
+
     def _heartbeat_loop(self):
         """Enviar heartbeat periodico a la API"""
         logger.debug("Thread de heartbeat iniciado")
@@ -74,22 +85,8 @@ class ThermalMonitor:
                 tiempo_actual = time.time()
 
                 if tiempo_actual - self.ultimo_heartbeat >= self.config.intervalo_heartbeat:
-                    en_horario = self.esta_en_horario_operacion()
-
-                    if en_horario:
-                        mensaje_heartbeat = (
-                            f"Proceso activo. "
-                            f"Estado: {self.estado_actual}, "
-                            f"Errores stream: {self.camera.errores_consecutivos}, "
-                            f"Evento activo: {self.id_evento_activo is not None}"
-                        )
-                    else:
-                        hora_actual_str = datetime.now().strftime("%H:%M")
-                        mensaje_heartbeat = (
-                            f"Sistema fuera de horario operativo ({hora_actual_str}). "
-                            f"Horario: {self.config.hora_inicio:02d}:00 - {self.config.hora_fin:02d}:00. "
-                            f"Monitoreo en espera."
-                        )
+                    mensaje_heartbeat = self.obtener_mensaje_heartbeat()
+                    logger.info(mensaje_heartbeat)
 
                     self.api.enviar_heartbeat(mensaje_heartbeat)
                     self.ultimo_heartbeat = tiempo_actual
@@ -168,9 +165,13 @@ class ThermalMonitor:
     def procesar_detecciones(
             self,
             frame: np.ndarray,
-            detecciones: List[Dict]
+            detecciones: Optional[List[Dict]]
     ):
         """Procesar detecciones y gestionar estados de eventos"""
+        if detecciones is None:
+            self.api.enviar_log("error", "Fallo del detector: muestra omitida; contadores de captura sin cambios")
+            return
+
         hay_deteccion = len(detecciones) > 0
 
         if not hay_deteccion:
@@ -241,19 +242,22 @@ class ThermalMonitor:
                     if frame is not None:
                         detecciones = self.detector.detectar(frame)
 
-                        logger.debug(
-                            f"Estado: {self.estado_actual} | "
-                            f"Detecciones: {len(detecciones)} | "
-                            f"Sin deteccion: {self.contador_sin_deteccion} | "
-                            f"Con deteccion: {self.contador_con_deteccion} | "
-                            f"Errores stream: {self.camera.errores_consecutivos}"
-                        )
+                        if detecciones is not None:
+                            logger.debug(
+                                f"Estado: {self.estado_actual} | "
+                                f"Detecciones: {len(detecciones)} | "
+                                f"Sin deteccion: {self.contador_sin_deteccion} | "
+                                f"Con deteccion: {self.contador_con_deteccion} | "
+                                f"Errores stream: {self.camera.errores_consecutivos}"
+                            )
 
                         self.procesar_detecciones(frame, detecciones)
 
                         ultimo_capture = tiempo_actual
 
                     else:
+                        self.contador_con_deteccion = 0
+                        self.contador_sin_deteccion = 0
                         logger.debug("Frame no disponible, esperando...")
                         time.sleep(1)
 
@@ -274,10 +278,6 @@ class ThermalMonitor:
 
         if not self.config.validar():
             logger.error("Configuracion invalida")
-            return
-
-        if not self.camera.inicializar():
-            logger.error("No se pudo inicializar la camara")
             return
 
         if not self.detector.cargar_modelo():
