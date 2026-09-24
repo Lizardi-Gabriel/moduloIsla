@@ -50,5 +50,5 @@ class AzureStorage:
                 return None
 
         except Exception as e:
-            logger.error(f"Excepcion al subir a Azure: {e}")
+            logger.error(f"Excepcion al subir a Azure: {type(e).__name__}")
             return None

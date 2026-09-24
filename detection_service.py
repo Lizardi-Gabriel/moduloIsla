@@ -25,10 +25,10 @@ class DetectionService:
         """Cargar modelo YOLO"""
         try:
             self.model = YOLO(self.model_path)
-            logger.info(f"Modelo YOLO cargado desde {self.model_path}")
+            logger.debug("Modelo YOLO cargado")
             return True
         except Exception as e:
-            logger.error(f"Error al cargar modelo YOLO: {str(e)}")
+            logger.error(f"Error al cargar modelo YOLO: {type(e).__name__}")
             return False
 
     def detectar(self, frame: np.ndarray) -> List[Dict]:
@@ -38,7 +38,7 @@ class DetectionService:
             return []
 
         try:
-            results = self.model(frame, conf=self.confidence_threshold)
+            results = self.model(frame, conf=self.confidence_threshold, verbose=False)
             detecciones = []
 
             for result in results:
@@ -58,5 +58,5 @@ class DetectionService:
             return detecciones
 
         except Exception as e:
-            logger.error(f"Error en deteccion: {e}")
+            logger.error(f"Error en deteccion: {type(e).__name__}")
             return []

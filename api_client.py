@@ -1,3 +1,4 @@
+from log_policy import LogLimiter
 import requests
 import threading
 import logging
@@ -23,6 +24,7 @@ class APIClient:
         self.username = username
         self.password = password
         self.token: Optional[str] = None
+        self._log_limiter = LogLimiter()
 
     def autenticar(self) -> bool:
         """Autenticar con la API y obtener token JWT"""
@@ -37,14 +39,14 @@ class APIClient:
 
             if response.status_code == 200:
                 self.token = response.json()["access_token"]
-                logger.info("Autenticacion exitosa")
+                logger.debug("Autenticacion exitosa")
                 return True
             else:
-                logger.error(f"Error de autenticacion con API: {response.status_code}, {response.text}")
+                logger.error(f"Error de autenticacion con API: {response.status_code}")
                 return False
 
         except Exception as e:
-            logger.error(f"Error al autenticar con API: {str(e)}")
+            logger.error(f"Error al autenticar con API: {type(e).__name__}")
             return False
 
     def _obtener_headers(self) -> Dict[str, str]:
@@ -53,8 +55,13 @@ class APIClient:
             "Authorization": f"Bearer {self.token}"
         }
 
-    def enviar_log(self, tipo: str, mensaje: str):
+    def enviar_log(self, tipo: str, mensaje: str, *, repetible: bool = False):
         """Enviar log al endpoint de la API de forma asincrona"""
+        if not self.token:
+            return
+        if not repetible and not self._log_limiter.allow((tipo, mensaje)):
+            return
+
         def _enviar():
             try:
                 if not self.token:
@@ -74,7 +81,7 @@ class APIClient:
                     logger.warning(f"Error al enviar log a API: {response.status_code}")
 
             except Exception as e:
-                logger.warning(f"Excepcion al enviar log a API: {e}")
+                logger.warning(f"Excepcion al enviar log a API: {type(e).__name__}")
 
         thread = threading.Thread(target=_enviar)
         thread.daemon = True
@@ -104,8 +111,8 @@ class APIClient:
                 return None
 
         except Exception as e:
-            logger.error(f"Excepcion al crear evento: {str(e)}")
-            self.enviar_log("error", f"Excepcion al crear evento: {str(e)}")
+            logger.error(f"Excepcion al crear evento: {type(e).__name__}")
+            self.enviar_log("error", f"Excepcion al crear evento: {type(e).__name__}")
             return None
 
     def subir_imagen_evento(self, evento_id: int, imagen_path: str, file_name: Optional[str] = None) -> bool:
@@ -129,16 +136,16 @@ class APIClient:
                 )
 
             if response.status_code in (200, 201):
-                logger.info(f"Imagen subida al endpoint de evento {evento_id}: {response.text}")
+                logger.debug(f"Imagen subida al endpoint de evento {evento_id}")
                 return True
 
-            logger.error(f"Error al subir imagen del evento {evento_id}: {response.status_code} - {response.text}")
+            logger.error(f"Error al subir imagen del evento {evento_id}: {response.status_code}")
             self.enviar_log("error", f"Error al subir imagen del evento {evento_id}: {response.status_code}")
             return False
 
         except Exception as e:
-            logger.error(f"Excepcion al subir imagen del evento {evento_id}: {str(e)}")
-            self.enviar_log("error", f"Excepcion al subir imagen del evento {evento_id}: {str(e)}")
+            logger.error(f"Excepcion al subir imagen del evento {evento_id}: {type(e).__name__}")
+            self.enviar_log("error", f"Excepcion al subir imagen del evento {evento_id}: {type(e).__name__}")
             return False
 
     def enviar_imagen_con_detecciones(
@@ -168,7 +175,7 @@ class APIClient:
                 if upload_response.status_code not in (200, 201):
                     logger.error(
                         f"Error al subir imagen al evento {evento_id}: "
-                        f"{upload_response.status_code} - {upload_response.text}"
+                        f"{upload_response.status_code}"
                     )
                     self.enviar_log(
                         "error",
@@ -176,7 +183,7 @@ class APIClient:
                     )
                     return
 
-                logger.info(f"Imagen subida correctamente al evento {evento_id}")
+                logger.debug(f"Imagen subida correctamente al evento {evento_id}")
 
 
                 upload_data = upload_response.json()
@@ -198,42 +205,29 @@ class APIClient:
                 )
 
                 if response.status_code in (200, 201):
-                    logger.info(f"Imagen y detecciones enviadas exitosamente - Evento: {evento_id}")
+                    logger.debug(f"Imagen y detecciones enviadas exitosamente - Evento: {evento_id}")
                     if callback_eliminar_archivo:
                         callback_eliminar_archivo()
                 else:
                     logger.error(
-                        f"Error al enviar imagen con detecciones a API: {response.status_code} - {response.text}"
+                        f"Error al registrar imagen y detecciones del evento {evento_id}: {response.status_code}"
                     )
                     self.enviar_log(
                         "error",
-                        f"Error al enviar imagen con detecciones a API: {response.status_code}"
+                        f"Error al registrar imagen y detecciones del evento {evento_id}: {response.status_code}"
                     )
 
             except Exception as e:
-                logger.error(f"Excepcion al enviar imagen con detecciones a API: {str(e)}")
-                self.enviar_log("error", f"Excepcion al enviar imagen con detecciones a API: {str(e)}")
+                logger.error(f"Excepcion al enviar imagen y detecciones del evento {evento_id}: {type(e).__name__}")
+                self.enviar_log("error", f"Excepcion al enviar imagen y detecciones del evento {evento_id}: {type(e).__name__}")
 
         thread = threading.Thread(target=_enviar)
         thread.daemon = True
         thread.start()
 
     def enviar_heartbeat(self, mensaje: str):
-        """Enviar heartbeat a la API de forma asincrona"""
-        def _enviar():
-            try:
-                if not self.token:
-                    return
-
-                self.enviar_log("info", mensaje)
-                logger.info("Heartbeat enviado a API")
-
-            except Exception as e:
-                logger.error(f"Error al enviar heartbeat: {e}")
-
-        thread = threading.Thread(target=_enviar)
-        thread.daemon = True
-        thread.start()
+        """Mantener la señal de vida sin anunciar un envio aun no confirmado."""
+        self.enviar_log("info", mensaje, repetible=True)
 
     def enviar_imagen_contexto_b64(self, evento_id: int, frame_contexto) -> bool:
         """Codificar imagen a Base64 y enviarla para descripcion"""
@@ -251,7 +245,7 @@ class APIClient:
                 # endpoint
                 url = f"{self.api_base_url}/eventos/{evento_id}/descripcion"
 
-                logger.info(f"Enviando imagen de contexto (Base64) para evento {evento_id}...")
+                logger.debug(f"Enviando imagen de contexto (Base64) para evento {evento_id}...")
 
                 response = requests.post(
                     url,
@@ -261,12 +255,12 @@ class APIClient:
                 )
 
                 if response.status_code in [200, 201]:
-                    logger.info(f"Imagen de contexto enviada con exito. Evento: {evento_id}")
+                    logger.debug(f"Imagen de contexto enviada con exito. Evento: {evento_id}")
                 else:
-                    logger.error(f"Error al enviar imagen contexto: {response.status_code} - {response.text}")
+                    logger.error(f"Error al enviar imagen contexto: {response.status_code}")
 
             except Exception as e:
-                logger.error(f"Excepcion enviando imagen contexto: {str(e)}")
+                logger.error(f"Excepcion enviando imagen contexto: {type(e).__name__}")
 
         thread = threading.Thread(target=_enviar)
         thread.daemon = True

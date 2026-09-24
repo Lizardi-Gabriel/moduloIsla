@@ -41,11 +41,12 @@ class ThermalMonitor:
         )
 
         self.camera.set_callbacks(
-            on_error=self.api.enviar_log,
-            on_reconnect=lambda msg: self.api.enviar_log("info", msg)
+            on_error=lambda tipo, msg: self.api.enviar_log(tipo, msg, repetible=True),
+            on_reconnect=lambda msg: self.api.enviar_log("info", msg, repetible=True)
         )
 
         self.running = False
+        self._detenido = False
 
         self.estado_actual = "sin_deteccion"
         self.id_evento_activo: Optional[int] = None
@@ -66,7 +67,7 @@ class ThermalMonitor:
 
     def _heartbeat_loop(self):
         """Enviar heartbeat periodico a la API"""
-        logger.info("Thread de heartbeat iniciado")
+        logger.debug("Thread de heartbeat iniciado")
 
         while self.thread_heartbeat_running:
             try:
@@ -77,7 +78,7 @@ class ThermalMonitor:
 
                     if en_horario:
                         mensaje_heartbeat = (
-                            f"Sistema operando normalmente. "
+                            f"Proceso activo. "
                             f"Estado: {self.estado_actual}, "
                             f"Errores stream: {self.camera.errores_consecutivos}, "
                             f"Evento activo: {self.id_evento_activo is not None}"
@@ -87,7 +88,7 @@ class ThermalMonitor:
                         mensaje_heartbeat = (
                             f"Sistema fuera de horario operativo ({hora_actual_str}). "
                             f"Horario: {self.config.hora_inicio:02d}:00 - {self.config.hora_fin:02d}:00. "
-                            f"Monitoreo en espera, conexion activa."
+                            f"Monitoreo en espera."
                         )
 
                     self.api.enviar_heartbeat(mensaje_heartbeat)
@@ -96,10 +97,10 @@ class ThermalMonitor:
                 time.sleep(30)
 
             except Exception as e:
-                logger.error(f"Error en thread de heartbeat: {e}")
+                logger.error(f"Error en thread de heartbeat: {type(e).__name__}")
                 time.sleep(30)
 
-        logger.info("Thread de heartbeat detenido")
+        logger.debug("Thread de heartbeat detenido")
 
     def iniciar_heartbeat(self):
         """Iniciar thread de heartbeat"""
@@ -112,14 +113,14 @@ class ThermalMonitor:
         self.thread_heartbeat = threading.Thread(target=self._heartbeat_loop)
         self.thread_heartbeat.daemon = True
         self.thread_heartbeat.start()
-        logger.info("Thread de heartbeat iniciado")
+        logger.debug("Thread de heartbeat iniciado")
 
     def detener_heartbeat(self):
         """Detener thread de heartbeat"""
         if self.thread_heartbeat is not None:
             self.thread_heartbeat_running = False
             self.thread_heartbeat.join(timeout=5)
-            logger.info("Thread de heartbeat detenido")
+            logger.debug("Thread de heartbeat detenido")
 
     def guardar_frame_temporal(self, frame: np.ndarray) -> Optional[str]:
         """Guardar frame en archivo temporal con timestamp y UUID"""
@@ -130,7 +131,7 @@ class ThermalMonitor:
             cv2.imwrite(str(filename), frame)
             return str(filename)
         except Exception as e:
-            logger.error(f"Error al guardar frame: {e}")
+            logger.error(f"Error al guardar frame: {type(e).__name__}")
             return None
 
     def procesar_imagen_con_detecciones(
@@ -147,15 +148,15 @@ class ThermalMonitor:
             return
 
         file_name = Path(imagen_path).name
-        logger.info(f"CAPTURA | Archivo: {file_name} | Evento: {evento_id} | Detecciones: {len(detecciones)}")
+        logger.debug(f"CAPTURA | Archivo: {file_name} | Evento: {evento_id} | Detecciones: {len(detecciones)}")
 
         def eliminar_archivo_temporal():
             try:
                 if os.path.exists(imagen_path):
                     os.remove(imagen_path)
-                    logger.info(f"Archivo temporal eliminado: {file_name}")
+                    logger.debug(f"Archivo temporal eliminado: {file_name}")
             except Exception as e:
-                logger.warning(f"No se pudo eliminar archivo temporal: {e}")
+                logger.warning(f"No se pudo eliminar archivo temporal: {type(e).__name__}")
 
         self.api.enviar_imagen_con_detecciones(
             evento_id=evento_id,
@@ -178,10 +179,10 @@ class ThermalMonitor:
 
             if self.contador_sin_deteccion >= self.config.umbral_cerrar_evento:
                 if self.id_evento_activo is not None:
-                    logger.info(f"Cerrando evento {self.id_evento_activo}")
+                    logger.info(f"Captura finalizada | Evento: {self.id_evento_activo} | Motivo: ausencia de detecciones")
                     self.api.enviar_log(
                         "info",
-                        f"Evento cerrado: {self.id_evento_activo} - Sin detecciones por tiempo prolongado"
+                        f"Captura finalizada | Evento: {self.id_evento_activo} | Motivo: ausencia de detecciones"
                     )
                     self.id_evento_activo = None
                     self.estado_actual = "sin_deteccion"
@@ -196,7 +197,6 @@ class ThermalMonitor:
                     self.id_evento_activo = self.api.crear_evento()
                     if self.id_evento_activo:
                         self.estado_actual = "evento_activo"
-                        logger.info("Estado: EVENTO ACTIVO")
 
             if self.id_evento_activo is not None:
                 self.procesar_imagen_con_detecciones(
@@ -218,20 +218,17 @@ class ThermalMonitor:
         self.api.enviar_log("info", "Sistema de monitoreo termico iniciado correctamente")
 
         ultimo_capture = time.time()
-        ultimo_log_fuera_horario = 0
+        horario_anterior = None
 
         while self.running:
             try:
-                if not self.esta_en_horario_operacion():
-                    tiempo_actual = time.time()
-                    if tiempo_actual - ultimo_log_fuera_horario >= 300:
-                        hora_actual_str = datetime.now().strftime("%H:%M")
-                        logger.info(
-                            f"Fuera de horario operativo ({hora_actual_str}). "
-                            f"Esperando horario {self.config.hora_inicio:02d}:00 - {self.config.hora_fin:02d}:00"
-                        )
-                        ultimo_log_fuera_horario = tiempo_actual
-
+                en_horario = self.esta_en_horario_operacion()
+                if en_horario != horario_anterior:
+                    mensaje = "Monitoreo en horario operativo" if en_horario else "Monitoreo en espera: fuera de horario operativo"
+                    logger.info(mensaje)
+                    self.api.enviar_log("info", mensaje, repetible=True)
+                    horario_anterior = en_horario
+                if not en_horario:
                     time.sleep(30)
                     continue
 
@@ -244,7 +241,7 @@ class ThermalMonitor:
                     if frame is not None:
                         detecciones = self.detector.detectar(frame)
 
-                        logger.info(
+                        logger.debug(
                             f"Estado: {self.estado_actual} | "
                             f"Detecciones: {len(detecciones)} | "
                             f"Sin deteccion: {self.contador_sin_deteccion} | "
@@ -257,25 +254,23 @@ class ThermalMonitor:
                         ultimo_capture = tiempo_actual
 
                     else:
-                        logger.warning("Frame no disponible, esperando...")
+                        logger.debug("Frame no disponible, esperando...")
                         time.sleep(1)
 
                 time.sleep(0.1)
 
             except KeyboardInterrupt:
-                logger.info("Interrupcion por usuario")
-                self.api.enviar_log("advertencia", "Sistema detenido por usuario")
                 break
             except Exception as e:
-                error_msg = f"Error en ciclo principal: {str(e)}"
+                error_msg = f"Error en ciclo principal: {type(e).__name__}"
                 logger.error(error_msg)
                 self.api.enviar_log("error", error_msg)
                 time.sleep(5)
 
     def iniciar(self):
         """Iniciar sistema de monitoreo"""
-        logger.info("Iniciando sistema de monitoreo termico...")
-        logger.info(f"Horario de operacion configurado: {self.config.hora_inicio:02d}:00 - {self.config.hora_fin:02d}:00")
+        logger.debug("Iniciando sistema de monitoreo termico...")
+        logger.debug(f"Horario de operacion configurado: {self.config.hora_inicio:02d}:00 - {self.config.hora_fin:02d}:00")
 
         if not self.config.validar():
             logger.error("Configuracion invalida")
@@ -306,8 +301,11 @@ class ThermalMonitor:
 
     def detener(self):
         """Detener sistema y liberar recursos"""
-        logger.info("Deteniendo sistema...")
-        self.api.enviar_log("advertencia", "Sistema de monitoreo termico detenido")
+        if self._detenido:
+            return
+        self._detenido = True
+        logger.debug("Deteniendo sistema...")
+        self.api.enviar_log("info", "Sistema de monitoreo termico detenido")
         self.running = False
 
         self.detener_heartbeat()

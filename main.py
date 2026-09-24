@@ -1,4 +1,6 @@
 import logging
+from logging.handlers import RotatingFileHandler
+from log_policy import RepeatedWarningFilter
 import signal
 import sys
 import os
@@ -10,10 +12,14 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('thermal_monitor.log'),
+        RotatingFileHandler('thermal_monitor.log', maxBytes=5_000_000, backupCount=3, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
+# Cada salida mantiene su propio limite para mostrar el primer fallo en ambas.
+for handler in logging.getLogger().handlers:
+    handler.addFilter(RepeatedWarningFilter())
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 monitor = None
@@ -51,7 +57,7 @@ def main():
         timeout_reconexion=10,
         intervalo_heartbeat=300,
         hora_inicio=6,
-        hora_fin=21 # 21
+        hora_fin=23# 21
     )
 
     monitor = ThermalMonitor(config)
