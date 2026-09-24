@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 import numpy as np
 
+import config as settings
 from config import Config
 from camera_manager import CameraManager
 from detection_service import DetectionService
@@ -91,11 +92,11 @@ class ThermalMonitor:
                     self.api.enviar_heartbeat(mensaje_heartbeat)
                     self.ultimo_heartbeat = tiempo_actual
 
-                time.sleep(30)
+                time.sleep(settings.HEARTBEAT_POLL_INTERVAL)
 
             except Exception as e:
                 logger.error(f"Error en thread de heartbeat: {type(e).__name__}")
-                time.sleep(30)
+                time.sleep(settings.HEARTBEAT_POLL_INTERVAL)
 
         logger.debug("Thread de heartbeat detenido")
 
@@ -116,7 +117,7 @@ class ThermalMonitor:
         """Detener thread de heartbeat"""
         if self.thread_heartbeat is not None:
             self.thread_heartbeat_running = False
-            self.thread_heartbeat.join(timeout=5)
+            self.thread_heartbeat.join(timeout=settings.HEARTBEAT_STOP_TIMEOUT)
             logger.debug("Thread de heartbeat detenido")
 
     def guardar_frame_temporal(self, frame: np.ndarray) -> Optional[str]:
@@ -230,7 +231,7 @@ class ThermalMonitor:
                     self.api.enviar_log("info", mensaje, repetible=True)
                     horario_anterior = en_horario
                 if not en_horario:
-                    time.sleep(30)
+                    time.sleep(settings.MONITOR_SCHEDULE_POLL_INTERVAL)
                     continue
 
                 tiempo_actual = time.time()
@@ -259,9 +260,9 @@ class ThermalMonitor:
                         self.contador_con_deteccion = 0
                         self.contador_sin_deteccion = 0
                         logger.debug("Frame no disponible, esperando...")
-                        time.sleep(1)
+                        time.sleep(settings.MONITOR_NO_FRAME_DELAY)
 
-                time.sleep(0.1)
+                time.sleep(settings.MONITOR_POLL_INTERVAL)
 
             except KeyboardInterrupt:
                 break
@@ -269,7 +270,7 @@ class ThermalMonitor:
                 error_msg = f"Error en ciclo principal: {type(e).__name__}"
                 logger.error(error_msg)
                 self.api.enviar_log("error", error_msg)
-                time.sleep(5)
+                time.sleep(settings.MONITOR_ERROR_DELAY)
 
     def iniciar(self):
         """Iniciar sistema de monitoreo"""
@@ -291,7 +292,7 @@ class ThermalMonitor:
         self.camera.iniciar_lectura_continua(self.esta_en_horario_operacion)
         self.iniciar_heartbeat()
 
-        time.sleep(2)
+        time.sleep(settings.MONITOR_STARTUP_DELAY)
 
         self.running = True
         try:

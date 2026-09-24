@@ -3,16 +3,17 @@ from logging.handlers import RotatingFileHandler
 from log_policy import RepeatedWarningFilter
 import signal
 import sys
-import os
 
+import config as settings
 from config import Config
 from thermal_monitor import ThermalMonitor
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=settings.LOG_LEVEL,
+    format=settings.LOG_FORMAT,
     handlers=[
-        RotatingFileHandler('thermal_monitor.log', maxBytes=5_000_000, backupCount=3, encoding='utf-8'),
+        RotatingFileHandler(settings.LOG_FILE, maxBytes=settings.LOG_MAX_BYTES,
+                            backupCount=settings.LOG_BACKUP_COUNT, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -40,25 +41,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    camera_source = os.getenv("CAMARA_TERMICA")
-    api_base_url = os.getenv("API_CONTROL")
-    username = os.getenv("USER_API")
-    password = os.getenv("PASSWORD")
-    model_path = os.getenv("MODEL_PATH")
-
-    config = Config.from_env(
-        camera_source=camera_source,
-        api_base_url=api_base_url,
-        username=username,
-        password=password,
-        model_path=model_path,
-        confidence_threshold=0.5,
-        max_errores_consecutivos=5,
-        timeout_reconexion=10,
-        intervalo_heartbeat=300,
-        hora_inicio=6,
-        hora_fin=23# 21
-    )
+    config = Config.from_env()
 
     monitor = ThermalMonitor(config)
 

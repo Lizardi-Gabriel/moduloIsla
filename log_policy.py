@@ -1,4 +1,5 @@
 """Control de repeticion para logs locales y remotos, sin ocultar el primer fallo."""
+from config import LOG_REPEAT_INTERVAL, LOG_REPEAT_CAPACITY
 import logging
 import threading
 import time
@@ -6,7 +7,7 @@ from collections import OrderedDict
 
 
 class LogLimiter:
-    def __init__(self, interval=300, capacity=512):
+    def __init__(self, interval=LOG_REPEAT_INTERVAL, capacity=LOG_REPEAT_CAPACITY):
         self.interval = interval
         self.capacity = capacity
         self._seen = OrderedDict()

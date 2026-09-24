@@ -2,11 +2,8 @@ import logging
 from typing import List, Dict, Optional
 from ultralytics import YOLO
 import numpy as np
-from dotenv import load_dotenv
+from config import Config
 logger = logging.getLogger(__name__)
-
-
-load_dotenv()
 
 
 class DetectionService:
@@ -15,7 +12,7 @@ class DetectionService:
     def __init__(
             self,
             model_path: str,
-            confidence_threshold: float = 0.5
+            confidence_threshold: float = Config.confidence_threshold
     ):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold

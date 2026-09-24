@@ -1,21 +1,49 @@
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 from dotenv import load_dotenv
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Parametros tecnicos compartidos. Tiempos en segundos salvo los sufijos _MS.
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+LOG_LEVEL = logging.INFO
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+LOG_FILE = "thermal_monitor.log"
+LOG_MAX_BYTES = 5_000_000
+LOG_BACKUP_COUNT = 3
+LOG_REPEAT_INTERVAL = 300
+LOG_REPEAT_CAPACITY = 512
+API_LOG_TIMEOUT = 10
+API_IMAGE_TIMEOUT = 30
+CAMERA_IO_TIMEOUT_MS = 5000
+CAMERA_BUFFER_SIZE = 1
+CAMERA_SCHEDULE_POLL_INTERVAL = 10
+CAMERA_RETRY_DELAY = 5
+CAMERA_READ_FAILURE_DELAY = 0.5
+CAMERA_READ_INTERVAL = 0.01
+CAMERA_ERROR_DELAY = 1
+CAMERA_STOP_TIMEOUT = 12
+HEARTBEAT_POLL_INTERVAL = 30
+HEARTBEAT_STOP_TIMEOUT = 5
+MONITOR_SCHEDULE_POLL_INTERVAL = 30
+MONITOR_NO_FRAME_DELAY = 1
+MONITOR_POLL_INTERVAL = 0.1
+MONITOR_ERROR_DELAY = 5
+MONITOR_STARTUP_DELAY = 2
 
 
 @dataclass
 class Config:
     """Configuracion del sistema de monitoreo termico"""
 
-    camera_source: str
-    api_base_url: str
-    username: str
-    password: str
-    model_path: str
+    # Los nombres existentes de .env se conservan por compatibilidad.
+    camera_source: str = field(default="", metadata={"env": "CAMARA_TERMICA"})
+    api_base_url: str = field(default="", metadata={"env": "API_CONTROL"})
+    username: str = field(default="", metadata={"env": "USER_API"})
+    password: str = field(default="", repr=False, metadata={"env": "PASSWORD"})
+    model_path: str = field(default="", metadata={"env": "MODEL_PATH"})
 
     confidence_threshold: float = 0.5
 
@@ -37,13 +65,24 @@ class Config:
 
     @classmethod
     def from_env(cls, **kwargs) -> 'Config':
-        """Crear configuracion desde variables de entorno y parametros"""
-        load_dotenv()
+        """Cargar .env y convertir tipos; prioridad: kwargs > entorno > defaults.
 
+        Los parametros sin alias usan su nombre en mayusculas en el entorno
+        (por ejemplo HORA_INICIO o CONFIDENCE_THRESHOLD).
+        """
+        load_dotenv(ENV_FILE)
         config_dict = {}
-
+        for item in fields(cls):
+            if item.name in kwargs:
+                continue
+            env_name = item.metadata.get("env", item.name.upper())
+            value = os.getenv(env_name)
+            if value is not None:
+                try:
+                    config_dict[item.name] = item.type(value)
+                except (TypeError, ValueError):
+                    raise ValueError(f"{env_name} debe ser de tipo {item.type.__name__}") from None
         config_dict.update(kwargs)
-
         return cls(**config_dict)
 
     def validar(self) -> bool:
@@ -80,4 +119,4 @@ class Config:
 
     def __post_init__(self):
         """Normalizar valores despues de inicializacion"""
-        self.api_base_url = self.api_base_url.rstrip('/')
+        self.api_base_url = (self.api_base_url or '').rstrip('/')

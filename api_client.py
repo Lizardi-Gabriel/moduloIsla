@@ -1,3 +1,4 @@
+import config as settings
 from log_policy import LogLimiter
 import requests
 import threading
@@ -74,7 +75,7 @@ class APIClient:
                         "mensaje": mensaje
                     },
                     headers=self._obtener_headers(),
-                    timeout=10
+                    timeout=settings.API_LOG_TIMEOUT
                 )
 
                 if response.status_code != 201:
@@ -132,7 +133,7 @@ class APIClient:
                     f"{self.api_base_url}/eventos/{evento_id}/imagenes/upload",
                     files=files,
                     headers=self._obtener_headers(),
-                    timeout=30
+                    timeout=settings.API_IMAGE_TIMEOUT
                 )
 
             if response.status_code in (200, 201):
@@ -169,7 +170,7 @@ class APIClient:
                         f"{self.api_base_url}/eventos/{evento_id}/imagenes/upload",
                         files=files,
                         headers=self._obtener_headers(),
-                        timeout=30
+                        timeout=settings.API_IMAGE_TIMEOUT
                     )
 
                 if upload_response.status_code not in (200, 201):
@@ -201,7 +202,7 @@ class APIClient:
                     f"{self.api_base_url}/eventos/{evento_id}/imagenes",
                     json=payload,
                     headers=self._obtener_headers(),
-                    timeout=30
+                    timeout=settings.API_IMAGE_TIMEOUT
                 )
 
                 if response.status_code in (200, 201):
@@ -251,7 +252,7 @@ class APIClient:
                     url,
                     json=payload,
                     headers=self._obtener_headers(),
-                    timeout=30
+                    timeout=settings.API_IMAGE_TIMEOUT
                 )
 
                 if response.status_code in [200, 201]:

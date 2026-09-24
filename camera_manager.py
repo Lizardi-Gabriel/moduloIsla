@@ -1,3 +1,5 @@
+import config as settings
+from config import Config
 import cv2
 import time
 import threading
@@ -14,9 +16,9 @@ class CameraManager:
     def __init__(
             self,
             camera_source: str,
-            max_errores_consecutivos: int = 5,
-            timeout_reconexion: int = 10,
-            max_antiguedad_frame: float = 5
+            max_errores_consecutivos: int = Config.max_errores_consecutivos,
+            timeout_reconexion: int = Config.timeout_reconexion,
+            max_antiguedad_frame: float = Config.max_antiguedad_frame
     ):
         self.camera_source = camera_source
         self.max_errores_consecutivos = max_errores_consecutivos
@@ -70,11 +72,11 @@ class CameraManager:
             logger.debug("Conectando a camara")
             self.cap = cv2.VideoCapture(
                 self.camera_source, cv2.CAP_FFMPEG,
-                [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
-                 cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000]
+                [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, settings.CAMERA_IO_TIMEOUT_MS,
+                 cv2.CAP_PROP_READ_TIMEOUT_MSEC, settings.CAMERA_IO_TIMEOUT_MS]
             )
 
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, settings.CAMERA_BUFFER_SIZE)
 
             if not self.cap.isOpened():
                 error_msg = "No se pudo abrir la camara RTSP"
@@ -146,7 +148,7 @@ class CameraManager:
         while self.thread_lectura_running:
             try:
                 if not en_horario_callback():
-                    self._stop.wait(10)
+                    self._stop.wait(settings.CAMERA_SCHEDULE_POLL_INTERVAL)
                     continue
 
                 if not self._verificar_estado_stream():
@@ -158,7 +160,7 @@ class CameraManager:
                     else:
                         logger.debug("Reconexion fallida, esperando antes de reintentar...")
                         self.errores_consecutivos += 1
-                        self._stop.wait(5)
+                        self._stop.wait(settings.CAMERA_RETRY_DELAY)
                         continue
 
                 ret, frame = self.cap.read()
@@ -181,11 +183,11 @@ class CameraManager:
                             self.errores_consecutivos = 0
                         else:
                             logger.debug("Reconexion fallida despues de errores")
-                            self._stop.wait(5)
+                            self._stop.wait(settings.CAMERA_RETRY_DELAY)
                     else:
-                        self._stop.wait(0.5)
+                        self._stop.wait(settings.CAMERA_READ_FAILURE_DELAY)
 
-                self._stop.wait(0.01)
+                self._stop.wait(settings.CAMERA_READ_INTERVAL)
 
             except Exception as e:
                 self.errores_consecutivos += 1
@@ -196,7 +198,7 @@ class CameraManager:
                 if self.errores_consecutivos >= self.max_errores_consecutivos:
                     self._intentar_reconexion()
 
-                self._stop.wait(1)
+                self._stop.wait(settings.CAMERA_ERROR_DELAY)
 
         logger.debug("Thread de lectura continua detenido")
 
@@ -222,7 +224,7 @@ class CameraManager:
         self.thread_lectura_running = False
         self._stop.set()
         if self.thread_lectura is not None:
-            self.thread_lectura.join(timeout=12)
+            self.thread_lectura.join(timeout=settings.CAMERA_STOP_TIMEOUT)
             logger.debug("Thread de lectura continua detenido")
 
     def _invalidar_frame(self):
