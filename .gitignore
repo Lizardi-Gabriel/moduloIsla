@@ -5,3 +5,4 @@ thermal_monitor.log
 /temp_images
 **/graphify-out
 **/__pycache__
+**/.venv
